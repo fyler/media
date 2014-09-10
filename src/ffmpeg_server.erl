@@ -150,7 +150,7 @@ handle_cast(_Request, State) ->
   {noreply, NewState :: #state{}, timeout() | hibernate} |
   {stop, Reason :: term(), NewState :: #state{}}).
 handle_info(start, State) ->
-  N = ulitos:get_var(media, ffmpeg_workers_count, 3),
+  N = ulitos_var:get_var(media, ffmpeg_workers_count, 3),
   Refs = ets:new(refs, [set, private]),
   prepopulate(N),
   {noreply, State#state{refs = Refs, max_count = N}};

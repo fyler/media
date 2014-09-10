@@ -11,7 +11,7 @@
 
 start(_StartType, _StartArgs) ->
   lager:info("Starting application: Media"),
-  ulitos:load_config(media, "media.conf"),
+  ulitos_app:load_config(media, "media.conf"),
   media_sup:start_link().
 
 stop(_State) ->
