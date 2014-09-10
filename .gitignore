@@ -1,0 +1,13 @@
+# erlang binaries and release
+ebin/
+*.beam
+.eunit
+*.dump
+
+c_src/*.o
+src/media_convert.erl
+priv/erffmpeg
+
+# IDEA files
+.idea/*
+*.iml

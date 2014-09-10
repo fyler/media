@@ -1,0 +1,14 @@
+{application, media,
+ [
+  {description, ""},
+  {vsn, "1"},
+  {registered, []},
+  {applications, [
+                  kernel,
+                  stdlib,
+                  lager,
+                  erlmedia
+                 ]},
+  {mod, {media_app, []}},
+  {env, []}
+ ]}.

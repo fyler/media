@@ -1,0 +1,6 @@
+{
+    ffmpeg_workers_count, 3
+}
+{
+    reader_buffer, 50
+}
