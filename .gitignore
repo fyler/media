@@ -7,6 +7,7 @@ ebin/
 c_src/*.o
 src/media_convert.erl
 priv/erffmpeg
+deps/
 
 # IDEA files
 .idea/*
