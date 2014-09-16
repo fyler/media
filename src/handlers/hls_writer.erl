@@ -6,12 +6,11 @@
 %%%-------------------------------------------------------------------
 -module(hls_writer).
 
-%%-include("log.hrl").
+-include("log.hrl").
 -include_lib("erlmedia/include/video_frame.hrl").
 -include_lib("mpegts/include/mpegts.hrl").
 
 -define(DELTA, 200).
--define(D(X), lager:debug("~p:~p ~p",[?MODULE, ?LINE, X])).
 -record(hls_frame, {
   data :: binary(),
   pts :: non_neg_integer(),
@@ -46,58 +45,63 @@ init_file(Options) when is_map(Options) ->
   file:write(PlaylistFile, Playlist),
   {ok, #hls_state{streamer = Streamer#streamer{audio_codec = Audio, video_codec = Video}, duration = Duration, playlist = PlaylistFile, dir = Dir}}.
 
+write_frame(#video_frame{flavor = metadata}, #hls_state{} = State) ->
+  {ok, State};
+
 write_frame(#video_frame{flavor = config} = Frame, #hls_state{streamer = Streamer} = State) ->
   {NewStreamer, undefined} = encode_frame(Streamer, Frame),
   {ok, State#hls_state{streamer = NewStreamer}};
 
-write_frame(#video_frame{} = Frame, #hls_state{streamer = Streamer} = State) ->
-  case encode_frame(Streamer, Frame) of
-    {NewStreamer, undefined} ->
-      {ok, State#hls_state{streamer = NewStreamer}};
-    {NewStreamer, HlsFrame} ->
-      {ok, add_frame(HlsFrame, State#hls_state{streamer = NewStreamer})}
-  end;
+write_frame(#video_frame{} = Frame, #hls_state{} = State) ->
+  {ok, add_frame(Frame, State)};
 
 write_frame(eof, #hls_state{frames = [#hls_frame{dts = Dts}| _] = Frames, dir = Dir, playlist = Playlist, start = Start, count = N} = State) ->
   write(Dir, N, Frames, Playlist, Dts - Start),
   finish_playlist(Playlist),
   {ok, State}.
 
-add_frame(#hls_frame{flavor = keyframe, dts = Dts} = Frame, #hls_state{frames = []} = State) ->
-  State#hls_state{frames = [Frame], last_keyframe = Dts, start = Dts};
+add_frame(#video_frame{flavor = keyframe, dts = Dts} = Frame, #hls_state{streamer = Streamer, frames = []} = State) ->
+  {NewStreamer, EncFrame} = encode_frame(Streamer, Frame),
+  State#hls_state{streamer = NewStreamer, frames = [EncFrame], last_keyframe = Dts, start = Dts};
 
-add_frame(#hls_frame{flavor = keyframe, dts = Dts} = Frame, #hls_state{dir = Dir, playlist = Playlist, frames = Frames, last_keyframe = undefined, start = Start, count = N} = State) ->
+add_frame(#video_frame{flavor = keyframe, dts = Dts} = Frame, #hls_state{streamer = Streamer, start = Start} = State) when Dts - Start < ?DELTA ->
+  {NewStreamer, EncFrame} = encode_frame(Streamer#streamer{pat_counter = 0, pmt_counter = 0}, Frame),
+  State#hls_state{streamer = NewStreamer, frames = [EncFrame], last_keyframe = Dts, start = Dts};
+
+add_frame(#video_frame{flavor = keyframe, dts = Dts} = Frame, #hls_state{streamer = Streamer, dir = Dir, playlist = Playlist, frames = Frames, last_keyframe = undefined, start = Start, count = N} = State) ->
+  {NewStreamer, EncFrame} = encode_frame(Streamer, Frame),
   write(Dir, N, Frames, Playlist, Dts - Start),
-  State#hls_state{frames = [Frame], last_keyframe = Dts, start = Dts, count = N + 1};
+  State#hls_state{streamer = NewStreamer, frames = [EncFrame], last_keyframe = Dts, start = Dts, count = N + 1};
 
-add_frame(#hls_frame{flavor = keyframe, dts = Dts} = Frame, #hls_state{dir = Dir, playlist = Playlist, duration = Duration, frames = Frames, last_keyframe = LastDts, start = Start, count = N} = State) when Start + Duration + ?DELTA < Dts ->
+add_frame(#video_frame{flavor = keyframe, dts = Dts} = Frame, #hls_state{streamer = Streamer, dir = Dir, playlist = Playlist, duration = Duration, frames = Frames, last_keyframe = LastDts, start = Start, count = N} = State) when Start + Duration + ?DELTA < Dts ->
+  {NewStreamer, EncFrame} = encode_frame(Streamer, Frame),
   Pred = fun(#hls_frame{dts = Dts1}) when Dts1 > LastDts -> true;
     (#hls_frame{dts = Dts1, flavor = keyframe}) when Dts1 == LastDts -> true;
     (#hls_frame{}) -> false
   end,
   {NewFrames, FramesToSegment} = lists:splitwith(Pred, Frames),
   write(Dir, N, FramesToSegment, Playlist, LastDts - Start),
-  State#hls_state{frames = [Frame|NewFrames], last_keyframe = Dts, start = LastDts, count = N + 1};
+  State#hls_state{streamer = NewStreamer, frames = [EncFrame|NewFrames], last_keyframe = Dts, start = LastDts, count = N + 1};
 
-add_frame(#hls_frame{flavor = keyframe, dts = Dts} = Frame, #hls_state{frames = Frames} = State) ->
-  State#hls_state{frames = [Frame|Frames], last_keyframe = Dts};
+add_frame(#video_frame{flavor = keyframe, dts = Dts} = Frame, #hls_state{streamer = Streamer, frames = Frames} = State) ->
+  {NewStreamer, EncFrame} = encode_frame(Streamer, Frame),
+  State#hls_state{streamer = NewStreamer, frames = [EncFrame|Frames], last_keyframe = Dts};
 
-add_frame(#hls_frame{content = video}, #hls_state{last_keyframe = undefined} = State) ->
+add_frame(#video_frame{content = video}, #hls_state{last_keyframe = undefined} = State) ->
   State;
 
-add_frame(#hls_frame{dts = Dts} = Frame, #hls_state{frames = []} = State) ->
-  State#hls_state{frames = [Frame], start = Dts};
+add_frame(#video_frame{dts = Dts} = Frame, #hls_state{streamer = Streamer, frames = []} = State) ->
+  {NewStreamer, EncFrame} = encode_frame(Streamer#streamer{sent_pat = false}, Frame),
+  State#hls_state{streamer = NewStreamer, frames = [EncFrame], start = Dts};
 
-add_frame(#hls_frame{dts = Dts} = Frame, #hls_state{dir = Dir, playlist = Playlist, duration = Duration, frames = Frames, last_keyframe = undefined, start = Start, count = N} = State) when Start + Duration + ?DELTA < Dts ->
-  Pred = fun(#hls_frame{dts = Dts1}) when Dts1 >= Dts -> true;
-    (#hls_frame{}) -> false
-  end,
-  {NewFrames, FramesToSegment} = lists:splitwith(Pred, Frames),
-  write(Dir, N, FramesToSegment, Playlist, Dts - Start),
-  State#hls_state{frames = [Frame|NewFrames], start = Dts, count = N + 1};
+add_frame(#video_frame{dts = Dts} = Frame, #hls_state{streamer = Streamer, dir = Dir, playlist = Playlist, duration = Duration, frames = Frames, last_keyframe = undefined, start = Start, count = N} = State) when Start + Duration + ?DELTA < Dts ->
+  {NewStreamer, EncFrame} = encode_frame(Streamer#streamer{sent_pat = false}, Frame),
+  write(Dir, N, Frames, Playlist, Dts - Start),
+  State#hls_state{streamer = NewStreamer, frames = [EncFrame], start = Dts, count = N + 1};
 
-add_frame(#hls_frame{} = Frame, #hls_state{frames = Frames} = State) ->
-  State#hls_state{frames = [Frame|Frames]}.
+add_frame(#video_frame{} = Frame, #hls_state{streamer = Streamer, frames = Frames} = State) ->
+  {NewStreamer, EncFrame} = encode_frame(Streamer, Frame),
+  State#hls_state{streamer = NewStreamer, frames = [EncFrame|Frames]}.
 
 encode_frame(Streamer, #video_frame{content = Content, flavor = Flavor, pts = Pts, dts = Dts} = Frame) ->
   {NewStreamer, Data} = mpegts:encode(Streamer, Frame),
