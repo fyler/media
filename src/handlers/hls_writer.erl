@@ -66,13 +66,13 @@ add_frame(#video_frame{flavor = keyframe, dts = Dts} = Frame, #hls_state{streame
   {NewStreamer, EncFrame} = encode_frame(Streamer, Frame),
   State#hls_state{streamer = NewStreamer, frames = [EncFrame], last_keyframe = Dts, last_tables = undefined, start = Dts};
 
-add_frame(#video_frame{flavor = keyframe, dts = Dts} = Frame, #hls_state{streamer = Streamer, start = Start} = State) when Dts - Start < ?DELTA ->
+add_frame(#video_frame{flavor = keyframe, dts = Dts} = Frame, #hls_state{streamer = Streamer, last_keyframe = undefined, start = Start, count = 0} = State) when Dts - Start < ?DELTA ->
   {NewStreamer, EncFrame} = encode_frame(Streamer#streamer{pat_counter = 0, pmt_counter = 0}, Frame),
   State#hls_state{streamer = NewStreamer, frames = [EncFrame], last_keyframe = Dts, last_tables = undefined, start = Dts};
 
 add_frame(#video_frame{flavor = keyframe, dts = Dts} = Frame, #hls_state{streamer = Streamer, dir = Dir, playlist = Playlist, frames = Frames, last_keyframe = undefined, start = Start, count = N} = State) ->
   {NewStreamer, EncFrame} = encode_frame(Streamer, Frame),
-  write(Dir, N, Frames, Playlist, Dts - Start, true),
+  write(Dir, N, Frames, Playlist, Dts - Start),
   State#hls_state{streamer = NewStreamer, frames = [EncFrame], last_keyframe = Dts, last_tables = undefined, start = Dts, count = N + 1};
 
 add_frame(#video_frame{flavor = keyframe, dts = Dts} = Frame, #hls_state{streamer = Streamer, dir = Dir, playlist = Playlist, duration = Duration, frames = Frames, last_keyframe = LastDts, start = Start, count = N} = State) when Start + Duration - ?DELTA < Dts ->
@@ -96,14 +96,19 @@ add_frame(#video_frame{dts = Dts} = Frame, #hls_state{streamer = Streamer, frame
   {NewStreamer, EncFrame} = encode_frame(Streamer#streamer{sent_pat = false}, Frame),
   State#hls_state{streamer = NewStreamer, frames = [EncFrame], start = Dts};
 
-add_frame(#video_frame{dts = Dts} = Frame, #hls_state{streamer = Streamer, dir = Dir, playlist = Playlist, duration = Duration, frames = Frames, last_keyframe = undefined, start = Start, count = N} = State) when Start + Duration =< Dts ->
+add_frame(#video_frame{dts = Dts} = Frame, #hls_state{streamer = Streamer, frames = Frames, duration = Duration, last_keyframe = undefined, last_tables = undefined, start = Start} = State) when Start + Duration =< Dts ->
   {NewStreamer, EncFrame} = encode_frame(Streamer#streamer{sent_pat = false}, Frame),
-  write(Dir, N, Frames, Playlist, Dts - Start),
-  State#hls_state{streamer = NewStreamer, frames = [EncFrame], start = Dts, count = N + 1};
+  State#hls_state{streamer = NewStreamer, frames = [EncFrame | Frames], last_tables = Dts};
 
 add_frame(#video_frame{dts = Dts} = Frame, #hls_state{streamer = Streamer, frames = Frames, last_tables = undefined, start = Start, duration = Duration} = State) when Start + Duration + ?DELTA < Dts ->
   {NewStreamer, EncFrame} = encode_frame(Streamer#streamer{sent_pat = false}, Frame),
   State#hls_state{streamer = NewStreamer, frames = [EncFrame | Frames], last_tables = Dts};
+
+add_frame(#video_frame{dts = Dts} = Frame, #hls_state{streamer = Streamer, dir = Dir, playlist = Playlist, duration = Duration, frames = Frames, last_keyframe = undefined, last_tables = LastTables, start = Start, count = N} = State) when Start + Duration + ?DELTA < Dts ->
+  {NewStreamer, EncFrame} = encode_frame(Streamer, Frame),
+  {NewFrames, FramesToSegment} = split_frames(Frames, LastTables),
+  write(Dir, N, FramesToSegment, Playlist, LastTables - Start),
+  State#hls_state{streamer = NewStreamer, frames = [EncFrame|NewFrames], last_tables = undefined, start = LastTables, count = N + 1};
 
 add_frame(#video_frame{dts = Dts} = Frame, #hls_state{streamer = Streamer, dir = Dir, playlist = Playlist, duration = Duration, frames = Frames, last_keyframe = LastDts, start = Start, count = N} = State) when Start + 3 * Duration / 2 < Dts andalso Start < LastDts andalso Dts - LastDts < Duration ->
   {NewStreamer, EncFrame} = encode_frame(Streamer, Frame),
@@ -120,8 +125,8 @@ add_frame(#video_frame{dts = Dts} = Frame, #hls_state{streamer = Streamer, dir =
 add_frame(#video_frame{dts = Dts} = Frame, #hls_state{streamer = Streamer, dir = Dir, playlist = Playlist, duration = Duration, frames = Frames, last_tables = LastTables, start = Start, count = N} = State) when Start + 3 * Duration / 2 < Dts ->
   {NewStreamer, EncFrame} = encode_frame(Streamer, Frame),
   {NewFrames, FramesToSegment} = split_frames(Frames, LastTables),
-  write(Dir, N, FramesToSegment, Playlist, LastTables - Start, true),
-  State#hls_state{streamer = NewStreamer, frames = [EncFrame|NewFrames], start = LastTables, last_keyframe = undefined, count = N + 1};
+  write(Dir, N, FramesToSegment, Playlist, LastTables - Start),
+  State#hls_state{streamer = NewStreamer, frames = [EncFrame|NewFrames], start = LastTables, last_keyframe = undefined, last_tables = undefined, count = N + 1};
 
 add_frame(#video_frame{} = Frame, #hls_state{streamer = Streamer, frames = Frames} = State) ->
   {NewStreamer, EncFrame} = encode_frame(Streamer, Frame),
@@ -164,19 +169,11 @@ encode_frame(Streamer, #video_frame{content = Content, flavor = Flavor, pts = Pt
   {NewStreamer, NewFrame}.
 
 write(Dir, N, Frames, Playlist, Duration) ->
-  write(Dir, N, Frames, Playlist, Duration, false).
-
-write(Dir, N, Frames, Playlist, Duration, Discontinuity) ->
   FileName = Dir ++ "/stream_" ++ integer_to_list(N) ++ ".ts",
   {ok, File} = file:open(FileName, [write, binary]),
   file:write(File, list_to_binary(lists:reverse([Data || #hls_frame{data = Data} <- Frames]))),
   file:close(File),
-  case Discontinuity of
-    true ->
-      file:write(Playlist, iolist_to_binary(lists:flatten(io_lib:format("#EXTINF:~.3f,~nstream_~p.ts~n#EXT-X-DISCONTINUITY~n", [Duration / 1000, N]))));
-    _ ->
-      file:write(Playlist, iolist_to_binary(lists:flatten(io_lib:format("#EXTINF:~.3f,~nstream_~p.ts~n", [Duration / 1000, N]))))
-  end.
+  file:write(Playlist, iolist_to_binary(lists:flatten(io_lib:format("#EXTINF:~.3f,~nstream_~p.ts~n", [Duration / 1000, N])))).
 
 finish_playlist(Playlist) ->
   file:write(Playlist, iolist_to_binary("#EXT-X-ENDLIST")),
