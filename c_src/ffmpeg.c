@@ -139,6 +139,8 @@ void reset() {
         avcodec_flush_buffers(output_audio[0].ctx);
     }
     if (input_audio.ctx) {
+        out_audio_count = 0;
+        audio_pts = 1e10;
         avcodec_flush_buffers(input_audio.ctx);
     }
 }
