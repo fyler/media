@@ -54,7 +54,12 @@ handle_call({get_converter, Input, Output, Options}, {Pid, _Ref}, #state{orders 
                 {Ref, Workers} ->
                   maps:put(Pid, {Ref, [WorkerPid | Workers]}, Clients)
                end,
-  {reply, ok, State#state{orders = maps:put(WorkerPid, {Pid, Options}, Orders), clients = NewClients}};
+  Reply =
+    case Input of
+      live -> {ok, WorkerPid};
+      _ -> ok
+    end,
+  {reply, Reply, State#state{orders = maps:put(WorkerPid, {Pid, Options}, Orders), clients = NewClients}};
 
 handle_call(_Request, _From, State) ->
   {reply, ok, State}.

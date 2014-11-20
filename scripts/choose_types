@@ -2,14 +2,16 @@
 %% -*- erlang -*-
 %%! -smp enable -sname choose_types
 main([]) ->
-	Readers = filelib:wildcard("src/handlers/*_reader.erl"),
-	Writers = filelib:wildcard("src/handlers/*_writer.erl"),
+  Readers = filelib:wildcard("src/handlers/*_reader.erl"),
+  Writers = filelib:wildcard("src/handlers/*_writer.erl"),
   ReadTypes = [string:substr(Reader, 14, string:len(Reader) - 24) || Reader <- Readers],
   WriteTypes = [string:substr(Writer, 14, string:len(Writer) - 24) || Writer <- Writers],
   FunctionTypes = [{Reader, Writer} || Reader <- ReadTypes, Writer <- WriteTypes],
   {ok, File} = file:open("src/media_convert.erl", [write]),
-  io:format(File, "%%Dynamically generated API for media_server.~n~n-module(media_convert).~n-export([~s]).", [string:join([Reader ++ "_to_" ++ Writer ++ "/1" || {Reader, Writer} <- FunctionTypes], ", ")]),
+  Functions = [Reader ++ "_to_" ++ Writer ++ "/1" || {Reader, Writer} <- FunctionTypes] ++ ["live_to_" ++ Writer ++ "/1" || Writer <- WriteTypes],
+  io:format(File, "%%Dynamically generated API for media_server.~n~n-module(media_convert).~n-export([~s]).", [string:join(Functions, ", ")]),
   [io:format(File, "~n~n~s_to_~s(Options) ->~n~cmedia_server:get_converter(~s_reader, [~s_writer], Options).", [Reader, Writer, 9, Reader, Writer]) || {Reader, Writer} <- FunctionTypes],
+  [io:format(File, "~n~nlive_to_~s(Options) ->~n~cmedia_server:get_converter(live, [~s_writer], Options).", [Writer, 9, Writer]) || Writer <- WriteTypes],
   file:close(File);
 
 main(["-clean"]) ->

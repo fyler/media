@@ -113,6 +113,9 @@ handle_cast({ffmpeg, #video_frame{content = video} = Frame}, #state{output_modul
       end
   end;
 
+handle_cast({ffmpeg, flush}, #state{reader = live} = State) ->
+  {noreply, State};
+
 handle_cast({ffmpeg, flush}, #state{reader = Reader, reader_state = Media, buffer_size = N, frame_id = Id} = State) ->
   Self = self(),
   spawn_link(fun() -> read_frames(Reader, Media, Id, N, Self) end),
@@ -126,6 +129,9 @@ handle_cast({ffmpeg, finish}, #state{output_modules = Modules, states = States, 
   Frames = lists:merge(FramesMerge, lists:reverse(queue:to_list(VideoBuffer)), lists:reverse(queue:to_list(AudioBuffer))),
   NewStates = write_frame(Frames, Modules, States),
   {stop, normal, State#state{states = write_frame(eof, Modules, NewStates)}};
+
+handle_cast({reader, ok}, #state{reader = live, ffmpeg = undefined} = State) ->
+  {noreply, State};
 
 handle_cast({reader, ok}, #state{reader = Reader, reader_state = Media, ffmpeg = undefined, buffer_size = N, frame_id = Id} = State) ->
   Self = self(),
@@ -155,6 +161,11 @@ handle_info({start, Options}, #state{reader = undefined, output_modules = Output
   {Content, Pid} = is_need_ffmpeg(Options),
   {noreply, State#state{states = States, ffmpeg = Pid, ffmpeg_content = Content}};
 
+handle_info({start, Options}, #state{reader = live, output_modules = Output} = State) ->
+  States = init_state(Output, Options),
+  {Content, Pid} = is_need_ffmpeg(Options),
+  {noreply, State#state{states = States, ffmpeg = Pid, ffmpeg_content = Content}};
+
 handle_info({start, #{filename := FileName} = Options}, #state{reader = Reader, output_modules = Output} = State) ->
   States = init_state(Output, Options),
   {ok, File} = file:open(FileName, [read, binary]),
@@ -163,7 +174,7 @@ handle_info({start, #{filename := FileName} = Options}, #state{reader = Reader, 
   Self = self(),
   spawn_link(fun() -> read_frames(Reader, Media, undefined, N, Self) end),
   {Content, Pid} = is_need_ffmpeg(Options),
-  {noreply, State#state{reader = Reader, reader_state = Media, states = States, ffmpeg = Pid, ffmpeg_content = Content, buffer_size = N}};
+  {noreply, State#state{reader_state = Media, states = States, ffmpeg = Pid, ffmpeg_content = Content, buffer_size = N}};
 
 handle_info(_Info, State) ->
   {noreply, State}.

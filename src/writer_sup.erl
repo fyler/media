@@ -24,7 +24,7 @@ start_worker(Input, Output, Options) ->
   supervisor:start_child(writer_worker_sup, [Input, Output, Options]).
 
 stop_worker(Pid) ->
-  supervisor:terminate_child(ffmpeg_worker_sup, Pid).
+  supervisor:terminate_child(writer_worker_sup, Pid).
 
 init([worker]) ->
   {ok, {{simple_one_for_one, 5, 10}, [
