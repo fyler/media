@@ -49,9 +49,10 @@ init_live(#{pid := Pid} = Options, #hls_state{actions = Actions} = State) ->
   Duration = maps:get(duration, Options, 20000),
   Video = maps:get(video, Options, h264),
   Audio = maps:get(audio, Options, aac),
+  Max = maps:get(max, Options, 3),
   Header = io_lib:format("#EXTM3U~n#EXT-X-TARGETDURATION:~p~n#EXT-X-VERSION:3~n", [Duration div 1000]),
   Streamer = mpegts:init(),
-  State#hls_state{streamer = Streamer#streamer{audio_codec = Audio, video_codec = Video}, duration = Duration, header = Header, pid = Pid, actions = [store | Actions]};
+  State#hls_state{streamer = Streamer#streamer{audio_codec = Audio, video_codec = Video}, duration = Duration, header = Header, max = Max, pid = Pid, actions = [store | Actions]};
 
 init_live(_Options, State) ->
   State.
@@ -220,7 +221,7 @@ write(#hls_state{dir = Dir, count = N, playlist = Playlist} = State, Frames,  Du
   {ok, File} = file:open(FileName, [write, binary]),
   file:write(File, list_to_binary(lists:reverse([Data || #hls_frame{data = Data} <- Frames]))),
   file:close(File),
-  file:write(Playlist, iolist_to_binary(lists:flatten(io_lib:format("#EXTINF:~.3f,~nstream_~p.ts~n", [Duration / 1000, N])))),
+  file:write(Playlist, iolist_to_binary((io_lib:format("#EXTINF:~.3f,~nstream_~p.ts~n", [Duration / 1000.0, N])))),
   State.
 
 store(#hls_state{pid = Pid, max = Max, header = Header, tracks_queue = Tracks, count = Number} = State, eof, _Duration) ->
@@ -229,22 +230,24 @@ store(#hls_state{pid = Pid, max = Max, header = Header, tracks_queue = Tracks, c
       Number >= Max -> Number - Max + 2;
       true -> 1
     end,
-  Playlist = iolist_to_binary([Header, io_lib:format("#EXT-X-MEDIA-SEQUENCE:~p~n", [N]) | queue:to_list(Tracks)]),
+  Playlist = iolist_to_binary([Header, io_lib:format("#EXT-X-MEDIA-SEQUENCE:~p~n", [N]), queue:to_list(Tracks), "#EXT-X-ENDLIST"]),
   Pid ! {Playlist, eof},
   State;
 
 store(#hls_state{pid = Pid, count = Number, max = Max, header = Header, tracks_queue = Tracks} = State, Frames, Duration) ->
+  Name = io_lib:format("stream_~p.ts", [Number]),
+  M3U8Line = io_lib:format("#EXTINF:~.3f,~n~s~n", [Duration/1000.0, Name]),
   N =
     if
       Number >= Max ->
-        NewTracks = queue:drop(queue:in(io_lib:format("#EXTINF:~.3f,~nstream_~p.ts~n", [Duration, Number]), Tracks)),
+        NewTracks = queue:drop(queue:in(M3U8Line, Tracks)),
         Number - Max + 2;
       true ->
-        NewTracks = queue:in(io_lib:format("#EXTINF:~.3f,~nstream_~p.ts~n", [Duration, Number]), Tracks),
+        NewTracks = queue:in(M3U8Line, Tracks),
         1
     end,
   Playlist = iolist_to_binary([Header, io_lib:format("#EXT-X-MEDIA-SEQUENCE:~p~n", [N]) | queue:to_list(NewTracks)]),
-  Pid ! {Playlist, list_to_binary(lists:reverse([Data || #hls_frame{data = Data} <- Frames]))},
+  Pid ! {lists:flatten(Name), Playlist, list_to_binary(lists:reverse([Data || #hls_frame{data = Data} <- Frames]))},
   State#hls_state{tracks_queue = NewTracks}.
 
 split_frames(Frames, Dts) ->
