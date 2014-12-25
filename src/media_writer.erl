@@ -114,7 +114,7 @@ handle_cast({ffmpeg, #video_frame{content = video} = Frame}, #state{output_modul
   end;
 
 handle_cast({ffmpeg, flush}, #state{reader = live} = State) ->
-  {noreply, State};
+  {noreply, State}; 
 
 handle_cast({ffmpeg, flush}, #state{reader = Reader, reader_state = Media, buffer_size = N, frame_id = Id} = State) ->
   Self = self(),

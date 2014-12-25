@@ -82,6 +82,10 @@ write_frame(#video_frame{flavor = config} = Frame, #hls_state{streamer = Streame
 write_frame(#video_frame{} = Frame, #hls_state{} = State) ->
   {ok, add_frame(Frame, State)};
 
+write_frame(eof, #hls_state{frames = []} = State) ->
+  action(State, eof, 0),
+  {ok, State};
+
 write_frame(eof, #hls_state{frames = [#hls_frame{dts = Dts}| _] = Frames, start = Start} = State) ->
   action(State, Frames, Dts - Start),
   action(State, eof, 0),
