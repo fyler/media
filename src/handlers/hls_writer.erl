@@ -167,6 +167,10 @@ add_frame(#video_frame{} = Frame, #hls_state{streamer = Streamer, frames = Frame
   {NewStreamer, EncFrame} = encode_frame(Streamer, Frame),
   State#hls_state{streamer = NewStreamer, frames = [EncFrame|Frames]}.
 
+encode_frame(Streamer, #video_frame{flavor = config} = Frame) ->
+  {NewStreamer, _} = mpegts:encode(Streamer, Frame),
+  {NewStreamer, undefined};
+
 encode_frame(#streamer{sent_pat = false} = Streamer, #video_frame{content = Content, flavor = Flavor, pts = Pts, dts = Dts} = Frame) ->
   {NewStreamer, Data} = mpegts:encode(Streamer, Frame),
   NewFrame = case Data of
