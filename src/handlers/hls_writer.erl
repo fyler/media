@@ -171,9 +171,11 @@ encode_frame(#streamer{sent_pat = false} = Streamer, #video_frame{content = Cont
   {NewStreamer, Data} = mpegts:encode(Streamer, Frame),
   NewFrame = case Data of
                <<>> ->
-                 undefined;
+                ?D({"Ahtung!", Content, Flavor, Pts, Dts}),
+                #hls_frame{content = Content, data = <<>>, flavor = Flavor, pts = Pts, dts = Dts, point = false};
                [] ->
-                 undefined;
+                ?D({"Ahtung!", Content, Flavor, Pts, Dts}),
+                #hls_frame{content = Content, data = <<>>, flavor = Flavor, pts = Pts, dts = Dts, point = false};
                _Else ->
                  #hls_frame{content = Content, data = Data, flavor = Flavor, pts = Pts, dts = Dts, point = true}
              end,
@@ -183,9 +185,11 @@ encode_frame(Streamer, #video_frame{content = video, flavor = keyframe, pts = Pt
   {NewStreamer, Data} = mpegts:encode(Streamer, Frame),
   NewFrame = case Data of
                <<>> ->
-                 undefined;
+                 ?D({"Ahtung!", video, keyframe, Pts, Dts}),
+                #hls_frame{content = video, data = <<>>, flavor = keyframe, pts = Pts, dts = Dts, point = false};
                [] ->
-                 undefined;
+                 ?D({"Ahtung!", video, keyframe, Pts, Dts}),
+                #hls_frame{content = video, data = <<>>, flavor = keyframe, pts = Pts, dts = Dts, point = false};
                _Else ->
                  #hls_frame{content = video, data = Data, flavor = keyframe, pts = Pts, dts = Dts, point = true}
              end,
@@ -195,9 +199,11 @@ encode_frame(Streamer, #video_frame{content = Content, flavor = Flavor, pts = Pt
   {NewStreamer, Data} = mpegts:encode(Streamer, Frame),
   NewFrame = case Data of
                <<>> ->
-                 undefined;
+                 ?D({"Ahtung!", Content, Flavor, Pts, Dts}),
+                #hls_frame{content = Content, data = <<>>, flavor = Flavor, pts = Pts, dts = Dts, point = false};
                [] ->
-                 undefined;
+                 ?D({"Ahtung!", Content, Flavor, Pts, Dts}),
+                #hls_frame{content = Content, data = <<>>, flavor = Flavor, pts = Pts, dts = Dts, point = false};
                _Else ->
                  #hls_frame{content = Content, data = Data, flavor = Flavor, pts = Pts, dts = Dts, point = false}
              end,
