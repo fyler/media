@@ -42,7 +42,7 @@ void reply_avframe(AVPacket *pkt, AVCodecContext *ctx) {
     ctx->codec_id == AV_CODEC_ID_AAC ? frame_codec_aac : ctx->codec_id == AV_CODEC_ID_MP3 ? frame_codec_mp3 : 0;
 
   r.flavor = pkt->flags & CODEC_FLAG_GLOBAL_HEADER ? frame_flavor_config :
-    pkt->flags & AV_PKT_FLAG_KEY & ctx->codec_type == AVMEDIA_TYPE_VIDEO ? frame_flavor_keyframe :
+    pkt->flags & AV_PKT_FLAG_KEY && ctx->codec_type == AVMEDIA_TYPE_VIDEO ? frame_flavor_keyframe :
     frame_flavor_frame;
   if (r.content == frame_content_audio) {
     r.channels = ctx->channels;
@@ -75,9 +75,9 @@ void error(const char *fmt, ...) {
     va_end(ap);
   }
 
-  char *msg = NULL;
+  char msg[256];
   va_start(ap, fmt);
-  vasprintf(&msg, fmt, ap);
+  vsnprintf(msg, 256, fmt, ap);
   va_end(ap);
 
 

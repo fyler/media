@@ -23,16 +23,29 @@
   terminate/2,
   code_change/3]).
 
--record(state, {reader,
-                reader_state,
-                output_modules,
-                states,
-                ffmpeg,
-                ffmpeg_content,
-                audio_buffer = queue:new(),
-                video_buffer = queue:new(),
-                buffer_size,
-                frame_id = undefined}).
+-record(state, {
+  reader,
+  reader_state,
+  output_modules,
+  states,
+  ffmpeg,
+  ffmpeg_content,
+  audio_buffer = queue:new(),
+  video_buffer = queue:new(),
+  buffer,
+  buffer_size,
+  frame_id = undefined,
+  subvideo}).
+
+-record(subvideo, {
+  config,
+  frame,
+  delta,
+  dts,
+  last_dts,
+  origin_config,
+  delay,
+  active}).
 
 %%%===================================================================
 %%% API
@@ -67,8 +80,9 @@ handle_call(_Request, _From, State) ->
   {noreply, NewState :: #state{}, timeout() | hibernate} |
   {stop, Reason :: term(), NewState :: #state{}}).
 
-handle_cast(#video_frame{next_id = Id} = Frame, #state{output_modules = Output, states = States, ffmpeg = undefined} = State) ->
-  {noreply, State#state{states = write_frame(Frame, Output, States), frame_id = Id}};
+handle_cast(#video_frame{next_id = Id} = Frame, #state{ffmpeg = undefined} = State) ->
+  NewState = handle_frame(Frame, State),
+  {noreply, NewState#state{frame_id = Id}};
 
 handle_cast(#video_frame{content = audio, next_id = Id} = Frame, #state{ffmpeg = FFmpeg, ffmpeg_content = #{audio := true}} = State) ->
   ffmpeg_worker:transcode(FFmpeg, Frame),
@@ -81,35 +95,59 @@ handle_cast(#video_frame{content = video, next_id = Id} = Frame, #state{ffmpeg =
 handle_cast(#video_frame{next_id = Id} = Frame, #state{} = State) ->
   handle_cast({ffmpeg, Frame}, State#state{frame_id = Id});
 
-handle_cast({ffmpeg, #video_frame{content = audio} = Frame}, #state{output_modules = Output, states = States, audio_buffer = Buffer, video_buffer = VideoBuffer} = State) ->
+handle_cast({ffmpeg, #video_frame{content = audio, dts = Dts} = Frame}, #state{audio_buffer = Buffer, video_buffer = VideoBuffer, buffer = BufferLength} = State) ->
   AudioBuffer = queue:in(Frame, Buffer),
   case queue:is_empty(VideoBuffer) of
     true ->
-      {noreply, State#state{audio_buffer = AudioBuffer}};
+      #video_frame{dts = Dts1, flavor = Flavor} = AFrame = queue:get(AudioBuffer),
+      if
+        Flavor == config ->
+          NewState = handle_frame(AFrame, State),
+          {noreply, NewState#state{audio_buffer = queue:drop(AudioBuffer)}};
+        Dts - Dts1 > BufferLength ->
+          NewState = handle_frame(AFrame, State),
+          {noreply, NewState#state{audio_buffer = queue:drop(AudioBuffer)}};
+        true ->
+          {noreply, State#state{audio_buffer = AudioBuffer}}
+      end;
     false ->
       #video_frame{dts = Dts1} = AFrame = queue:get(AudioBuffer),
       #video_frame{dts = Dts2} = VFrame = queue:get(VideoBuffer),
       if
         Dts1 < Dts2 ->
-          {noreply, State#state{states = write_frame(AFrame, Output, States), audio_buffer = queue:drop(AudioBuffer)}};
+          NewState = handle_frame(AFrame, State),
+          {noreply, NewState#state{audio_buffer = queue:drop(AudioBuffer)}};
         true ->
-          {noreply, State#state{states = write_frame(VFrame, Output, States), audio_buffer = AudioBuffer, video_buffer = queue:drop(VideoBuffer)}}
+          NewState = handle_frame(VFrame, State),
+          {noreply, NewState#state{audio_buffer = AudioBuffer, video_buffer = queue:drop(VideoBuffer)}}
       end
   end;
 
-handle_cast({ffmpeg, #video_frame{content = video} = Frame}, #state{output_modules = Output, states = States, audio_buffer = AudioBuffer, video_buffer = Buffer} = State) ->
+handle_cast({ffmpeg, #video_frame{content = video, dts = Dts} = Frame}, #state{audio_buffer = AudioBuffer, video_buffer = Buffer, buffer = BufferLength} = State) ->
   VideoBuffer = queue:in(Frame, Buffer),
   case queue:is_empty(AudioBuffer) of
     true ->
-      {noreply, State#state{video_buffer = VideoBuffer}};
+      #video_frame{dts = Dts1, flavor = Flavor} = VFrame = queue:get(VideoBuffer),
+      if
+        Flavor == config ->
+          NewState = handle_frame(VFrame, State),
+          {noreply, NewState#state{video_buffer = queue:drop(VideoBuffer)}};
+        Dts - Dts1 > BufferLength ->
+          NewState = handle_frame(VFrame, State),
+          {noreply, NewState#state{video_buffer = queue:drop(VideoBuffer)}};
+        true ->
+          {noreply, State#state{video_buffer = VideoBuffer}}
+      end;
     false ->
       #video_frame{dts = Dts1} = VFrame = queue:get(VideoBuffer),
       #video_frame{dts = Dts2} = AFrame = queue:get(AudioBuffer),
       if
         Dts1 =< Dts2 ->
-          {noreply, State#state{states = write_frame(VFrame, Output, States), video_buffer = queue:drop(VideoBuffer)}};
+          NewState = handle_frame(VFrame, State),
+          {noreply, NewState#state{video_buffer = queue:drop(VideoBuffer)}};
         true ->
-          {noreply, State#state{states = write_frame(AFrame, Output, States), video_buffer = VideoBuffer, audio_buffer = queue:drop(AudioBuffer)}}
+          NewState = handle_frame(AFrame, State),
+          {noreply, NewState#state{video_buffer = VideoBuffer, audio_buffer = queue:drop(AudioBuffer)}}
       end
   end;
 
@@ -159,12 +197,16 @@ handle_cast(_Request, State) ->
 handle_info({start, Options}, #state{reader = undefined, output_modules = Output} = State) ->
   States = init_state(Output, Options),
   {Content, Pid} = is_need_ffmpeg(Options),
-  {noreply, State#state{states = States, ffmpeg = Pid, ffmpeg_content = Content}};
+  Buffer = maps:get(buffer, Options, 2500),
+  SubVideo = init_subvideo(Options),
+  {noreply, State#state{states = States, ffmpeg = Pid, ffmpeg_content = Content, buffer = Buffer, subvideo = SubVideo}};
 
 handle_info({start, Options}, #state{reader = live, output_modules = Output} = State) ->
   States = init_state(Output, Options),
   {Content, Pid} = is_need_ffmpeg(Options),
-  {noreply, State#state{states = States, ffmpeg = Pid, ffmpeg_content = Content}};
+  Buffer = maps:get(buffer, Options, 2500),
+  SubVideo = init_subvideo(Options),
+  {noreply, State#state{states = States, ffmpeg = Pid, ffmpeg_content = Content, buffer = Buffer, subvideo = SubVideo}};
 
 handle_info({start, #{filename := FileName} = Options}, #state{reader = Reader, output_modules = Output} = State) ->
   States = init_state(Output, Options),
@@ -174,7 +216,9 @@ handle_info({start, #{filename := FileName} = Options}, #state{reader = Reader, 
   Self = self(),
   spawn_link(fun() -> read_frames(Reader, Media, undefined, N, Self) end),
   {Content, Pid} = is_need_ffmpeg(Options),
-  {noreply, State#state{reader_state = Media, states = States, ffmpeg = Pid, ffmpeg_content = Content, buffer_size = N}};
+  Buffer = maps:get(buffer, Options, 100000),
+  SubVideo = init_subvideo(Options),
+  {noreply, State#state{reader_state = Media, states = States, ffmpeg = Pid, ffmpeg_content = Content, buffer_size = N, buffer = Buffer, subvideo = SubVideo}};
 
 handle_info(_Info, State) ->
   {noreply, State}.
@@ -213,6 +257,16 @@ init_state([Module | Output], Options, Acc) ->
 init_state([], _Options, Acc) ->
   lists:reverse(Acc).
 
+init_subvideo(Options) ->
+  case maps:get(subvideo, Options, undefined) of
+    undefined ->
+      undefined;
+    #{config := Config, frame := Frame, delta := Delta, delay := Delay} ->
+      #subvideo{config = Config, frame = Frame, delta = Delta, dts = 0, delay = Delay, active = false};
+    _ ->
+      undefined
+  end.
+
 read_frames(_Reader, _Media, _Id, 0, Owner) ->
   gen_server:cast(Owner, {reader, ok});
 
@@ -239,6 +293,40 @@ is_need_ffmpeg(#{video := #{output := _} = Video}) ->
 
 is_need_ffmpeg(#{}) ->
   {#{}, undefined}.
+
+handle_frame(Frame, State) ->
+  #state{states = States, output_modules = Output} = NewState= substitute_video(Frame, State),
+  NewState#state{states = write_frame(Frame, Output, States)}.
+
+substitute_video(_, #state{subvideo = undefined} = State) ->
+  State;
+
+substitute_video(#video_frame{flavor = Flavor, dts = Dts}, #state{subvideo = #subvideo{last_dts = undefined} = SubVideo} = State) when Flavor == frame orelse Flavor == keyframe ->
+  State#state{subvideo = SubVideo#subvideo{last_dts = Dts}};
+
+substitute_video(#video_frame{content = video, flavor = config} = Frame, #state{subvideo  = SubVideo} = State) ->
+  State#state{subvideo = SubVideo#subvideo{origin_config = Frame}};
+
+substitute_video(#video_frame{content = video, dts = Dts}, #state{subvideo = #subvideo{active = false} = SubVideo} = State) ->
+  State#state{subvideo = SubVideo#subvideo{last_dts = Dts}};
+
+substitute_video(#video_frame{content = video, dts = Dts}, #state{states = States, output_modules = Output, subvideo = #subvideo{active = true, origin_config = Config} = SubVideo} = State) ->
+  NewStates = write_frame(Config#video_frame{pts = Dts, dts = Dts}, Output, States),
+  State#state{states = NewStates, subvideo = SubVideo#subvideo{last_dts = Dts, active = false}};
+
+substitute_video(#video_frame{content = audio, dts = Dts}, #state{states = States, output_modules = Output, subvideo = #subvideo{config = Config, frame = Frame, delta = Delta, last_dts = LastDts, delay = Delay, active = false} = SubVideo} = State) when Dts - LastDts > Delay ->
+  NewStates = write_frame([Frame#video_frame{pts = Dts, dts = Dts}, Config#video_frame{pts = Dts, dts = Dts}], Output, States),
+  State#state{states = NewStates, subvideo = SubVideo#subvideo{dts = Dts + Delta, active = true}}; 
+
+substitute_video(#video_frame{content = audio}, #state{subvideo = #subvideo{active = false}} = State) ->
+  State;
+
+substitute_video(#video_frame{content = audio, dts = AudioDts}, #state{states = States, output_modules = Output, subvideo = #subvideo{frame = Frame, delta = Delta, dts = Dts, active = true} = SubVideo} = State) when AudioDts > Dts ->
+  NewStates = write_frame(Frame#video_frame{pts = Dts, dts = Dts}, Output, States),
+  State#state{states = NewStates, subvideo = SubVideo#subvideo{dts = Dts + Delta}};
+
+substitute_video(#video_frame{}, #state{} = State) ->
+  State.
 
 write_frame(Frames, Modules, States) when is_list(Frames) ->
   lists:foldr(fun(Frame, StatesAcc) -> write_frame(Frame, Modules, StatesAcc) end, States, Frames);

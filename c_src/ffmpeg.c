@@ -31,18 +31,13 @@ typedef struct Track {
   int height;
 } Track;
 
-#define MAX_OUTPUT_TRACKS 4
-
-
 Track input_audio;
 Track input_video;
-Track output_audio[MAX_OUTPUT_TRACKS];
-int out_audio_count = 0;
+Track output_audio;
 SwrContext *resample_context = NULL;
 AVAudioFifo *fifo = NULL;
 int64_t audio_pts = 1e10;
-Track output_video[MAX_OUTPUT_TRACKS];
-int out_video_count = 0;
+Track output_video;
 
 extern int out_fd;
 extern int in_fd;
@@ -56,22 +51,18 @@ void error(const char *fmt, ...);
 ssize_t read1(int fd, void *buf, ssize_t len);
 FILE *logg;
 
-int main(int argc, char *argv[]) {
+int main(int argc, char *argv[]) 
+{
   avcodec_register_all();
   av_log_set_level(AV_LOG_ERROR);
 
   bzero(&input_audio, sizeof(Track));
   bzero(&input_video, sizeof(Track));
-  bzero(&output_audio, sizeof(output_audio));
-  bzero(&output_video, sizeof(output_video));
-
-  argc--;
-  argv++;
-  if(argc >= 2  && !strcmp(argv[0], "-d")) {
-    debug_loop(argc, argv, loop);
-  } else {
-    loop();
-  }
+  bzero(&output_audio, sizeof(Track));
+  bzero(&output_video, sizeof(Track));
+  
+  loop();
+  
   return 0;
 }
 
@@ -80,31 +71,31 @@ void flush() {
      init_packet(&output_packet);
      int got_packet;
      int nb_samples;
-     const int output_frame_size = output_audio[0].ctx->frame_size;
+     const int output_frame_size = output_audio.ctx->frame_size;
      int ret = 0;
-     while ((ret = convert_and_store(NULL, fifo, input_audio.ctx, output_audio[0].ctx, resample_context)) > 0);
+     while ((ret = convert_and_store(NULL, fifo, input_audio.ctx, output_audio.ctx, resample_context)) > 0);
      if (ret < 0) {
         error("failed to flush swr buffer");
      }
      while (av_audio_fifo_size(fifo) >= output_frame_size) {
          init_packet(&output_packet);
-         if (load_and_encode(fifo, output_audio[0].ctx, &output_packet, &got_packet, &nb_samples) < 0)
+         if (load_and_encode(fifo, output_audio.ctx, &output_packet, &got_packet, &nb_samples) < 0)
                         error("failed to encode audio");
          if(got_packet) {
             output_packet.dts = output_packet.pts = audio_pts;
             audio_pts += output_packet.duration;
-            reply_avframe(&output_packet, output_audio[0].ctx);
+            reply_avframe(&output_packet, output_audio.ctx);
          }
          av_free_packet(&output_packet);
      }
      do {
         init_packet(&output_packet);
-        if(encode_audio_frame(NULL, output_audio[0].ctx, &output_packet, &got_packet, &nb_samples))
+        if(encode_audio_frame(NULL, output_audio.ctx, &output_packet, &got_packet, &nb_samples))
             error("failed to encode audio");
         if(got_packet) {
             output_packet.dts = output_packet.pts = audio_pts;
             audio_pts += output_packet.duration;
-            reply_avframe(&output_packet, output_audio[0].ctx);
+            reply_avframe(&output_packet, output_audio.ctx);
         }
         av_free_packet(&output_packet);
      } while (got_packet);
@@ -117,11 +108,10 @@ void clean() {
     if (resample_context) {
         swr_free(&resample_context);
     }
-    if (output_audio[0].ctx) {
-        avcodec_free_context(&output_audio[0].ctx);
-        av_free(output_audio[0].ctx);
-        output_audio[0].codec = NULL;
-        out_audio_count = 0;
+    if (output_audio.ctx) {
+        avcodec_free_context(&output_audio.ctx);
+        av_free(output_audio.ctx);
+        output_audio.codec = NULL;
         audio_pts = 1e10;
     }
     if (input_audio.ctx) {
@@ -135,11 +125,10 @@ void reset() {
     if (fifo) {
         av_audio_fifo_reset(fifo);
     }
-    if (output_audio[0].ctx) {
-        avcodec_flush_buffers(output_audio[0].ctx);
+    if (output_audio.ctx) {
+        avcodec_flush_buffers(output_audio.ctx);
     }
     if (input_audio.ctx) {
-        out_audio_count = 0;
         audio_pts = 1e10;
         avcodec_flush_buffers(input_audio.ctx);
     }
@@ -192,14 +181,14 @@ void loop() {
       return;
     }
     if (!strcmp(command, "flush")) {
-        if(output_audio[0].ctx) {
+        if(output_audio.ctx) {
             flush();
         }
         reply_atom("flush");
         continue;
     }
     if (!strcmp(command, "finish")) {
-        if(output_audio[0].ctx) {
+        if(output_audio.ctx) {
              flush();
         }
         reset();
@@ -297,14 +286,14 @@ void loop() {
 
       long track_id = -1;
       if(ei_decode_long(buf, &idx, &track_id) == -1) error("track_id must be integer");
-      if(track_id < 1 || track_id > MAX_OUTPUT_TRACKS+1) error("track_id must be from 1 to %d", MAX_OUTPUT_TRACKS+1);
+      if(track_id < 1) error("track_id must be more then 1");
       track_id--;
 
       Track *t = NULL;
       if(!strcmp(content, "audio")) {
-        t = &output_audio[out_audio_count++];
+        t = &output_audio;
       } else if(!strcmp(content, "video")) {
-        t = &output_video[out_video_count++];
+        t = &output_video;
       } else {
         error("invalid_content '%s'", content);
       }
@@ -423,12 +412,12 @@ void loop() {
         /** Define the first pts. */
         audio_pts = FFMIN(packet.pts, audio_pts);
 
-        const int output_frame_size = output_audio[0].ctx->frame_size;
+        const int output_frame_size = output_audio.ctx->frame_size;
         int finished = 0;
 
         while (packet.size > 0)
         {
-            if (decode_convert_and_store(fifo, &packet, input_audio.ctx, output_audio[0].ctx, resample_context, &finished) < 0)
+            if (decode_convert_and_store(fifo, &packet, input_audio.ctx, output_audio.ctx, resample_context, &finished) < 0)
                 error("failed to decode audio");
         }
         av_free_packet(&packet);
@@ -442,12 +431,12 @@ void loop() {
 
         while (av_audio_fifo_size(fifo) >= output_frame_size) {
             init_packet(&output_packet);
-            if (load_and_encode(fifo, output_audio[0].ctx, &output_packet, &got_packet, &nb_samples) < 0)
+            if (load_and_encode(fifo, output_audio.ctx, &output_packet, &got_packet, &nb_samples) < 0)
                 error("failed to encode audio");
             if(got_packet) {
                 output_packet.dts = output_packet.pts = audio_pts;
                 audio_pts += output_packet.duration;
-                reply_avframe(&output_packet, output_audio[0].ctx);
+                reply_avframe(&output_packet, output_audio.ctx);
             }
             av_free_packet(&output_packet);
         }
@@ -474,8 +463,7 @@ void loop() {
 
           int could_encode = 0;
 
-          if(out_video_count <= 0) error("trying to transcode uninitialized video");
-          if(avcodec_encode_video2(output_video[0].ctx, &pkt, decoded_frame, &could_encode) != 0) 
+          if(avcodec_encode_video2(output_video.ctx, &pkt, decoded_frame, &could_encode) != 0) 
             error("Failed to encode h264");
 
           if(could_encode) {
@@ -483,7 +471,7 @@ void loop() {
               dts_shift = -pkt.dts;
             }
             pkt.dts += dts_shift;
-            reply_avframe(&pkt, output_video[0].ctx);
+            reply_avframe(&pkt, output_video.ctx);
           } else if(!sent_config) {
             reply_atom("ok");
           }
