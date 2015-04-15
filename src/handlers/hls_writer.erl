@@ -101,16 +101,13 @@ add_frame(#video_frame{flavor = keyframe, dts = Dts} = Frame, #hls_state{streame
 
 add_frame(#video_frame{flavor = keyframe, dts = Dts} = Frame, #hls_state{streamer = Streamer, frames = Frames, last_keyframe = undefined, start = Start, count = N} = State) ->
   {NewStreamer, EncFrame} = encode_frame(Streamer, Frame),
-  %%write(Dir, N, Frames, Playlist, Dts - Start),
   NewState = action(State, Frames, Dts - Start),
   NewState#hls_state{streamer = NewStreamer, frames = [EncFrame], last_keyframe = Dts, last_tables = undefined, start = Dts, count = N + 1};
 
-add_frame(#video_frame{flavor = keyframe, dts = Dts} = Frame, #hls_state{streamer = Streamer, duration = Duration, frames = Frames, last_keyframe = LastDts, start = Start, count = N} = State) when Start + Duration - ?DELTA < Dts ->
+add_frame(#video_frame{flavor = keyframe, dts = Dts} = Frame, #hls_state{streamer = Streamer, duration = Duration, frames = Frames, start = Start, count = N} = State) when Start + Duration - ?DELTA < Dts ->
   {NewStreamer, EncFrame} = encode_frame(Streamer, Frame),
-  {NewFrames, FramesToSegment} = split_frames(Frames, LastDts),
-  %%write(Dir, N, FramesToSegment, Playlist, LastDts - Start),
-  NewState = action(State, FramesToSegment, LastDts - Start),
-  NewState#hls_state{streamer = NewStreamer, frames = [EncFrame|NewFrames], last_keyframe = Dts, last_tables = undefined, start = LastDts, count = N + 1};
+  NewState = action(State, Frames, Dts - Start),
+  NewState#hls_state{streamer = NewStreamer, frames = [EncFrame], last_keyframe = Dts, last_tables = undefined, start = Dts, count = N + 1};
 
 add_frame(#video_frame{flavor = keyframe, dts = Dts} = Frame, #hls_state{streamer = Streamer, frames = Frames} = State) ->
   {NewStreamer, EncFrame} = encode_frame(Streamer, Frame),
@@ -138,28 +135,24 @@ add_frame(#video_frame{dts = Dts} = Frame, #hls_state{streamer = Streamer, frame
 add_frame(#video_frame{dts = Dts} = Frame, #hls_state{streamer = Streamer, duration = Duration, frames = Frames, last_keyframe = undefined, last_tables = LastTables, start = Start, count = N} = State) when Start + Duration + ?DELTA < Dts ->
   {NewStreamer, EncFrame} = encode_frame(Streamer, Frame),
   {NewFrames, FramesToSegment} = split_frames(Frames, LastTables),
-  %%write(Dir, N, FramesToSegment, Playlist, LastTables - Start),
   NewState = action(State, FramesToSegment, LastTables - Start),
   NewState#hls_state{streamer = NewStreamer, frames = [EncFrame|NewFrames], last_tables = undefined, start = LastTables, count = N + 1};
 
 add_frame(#video_frame{dts = Dts} = Frame, #hls_state{streamer = Streamer, duration = Duration, frames = Frames, last_keyframe = LastDts, start = Start, count = N} = State) when Start + 3 * Duration / 2 < Dts andalso Start < LastDts andalso Dts - LastDts < Duration ->
   {NewStreamer, EncFrame} = encode_frame(Streamer, Frame),
   {NewFrames, FramesToSegment} = split_frames(Frames, LastDts),
-  %%write(Dir, N, FramesToSegment, Playlist, LastDts - Start),
   NewState = action(State, FramesToSegment, LastDts - Start),
   NewState#hls_state{streamer = NewStreamer, frames = [EncFrame|NewFrames], start = LastDts, count = N + 1};
 
 add_frame(#video_frame{dts = Dts} = Frame, #hls_state{streamer = Streamer, duration = Duration, frames = Frames, last_keyframe = LastDts, start = Start, count = N} = State) when Start + 3 * Duration / 2 < Dts andalso Start < LastDts andalso Dts - LastDts >= Duration ->
   {NewStreamer, EncFrame} = encode_frame(Streamer#streamer{sent_pat = false}, Frame),
   {NewFrames, FramesToSegment} = split_frames(Frames, LastDts),
-  %%write(Dir, N, FramesToSegment, Playlist, LastDts - Start),
   NewState = action(State, FramesToSegment, LastDts - Start),
   NewState#hls_state{streamer = NewStreamer, frames = [EncFrame|NewFrames], start = LastDts, last_tables = Dts, count = N + 1};
 
 add_frame(#video_frame{dts = Dts} = Frame, #hls_state{streamer = Streamer, duration = Duration, frames = Frames, last_tables = LastTables, start = Start, count = N} = State) when Start + 3 * Duration / 2 < Dts ->
   {NewStreamer, EncFrame} = encode_frame(Streamer, Frame),
   {NewFrames, FramesToSegment} = split_frames(Frames, LastTables),
-  %%write(Dir, N, FramesToSegment, Playlist, LastTables - Start),
   NewState = action(State, FramesToSegment, LastTables - Start),
   NewState#hls_state{streamer = NewStreamer, frames = [EncFrame|NewFrames], start = LastTables, last_keyframe = undefined, last_tables = undefined, count = N + 1};
 
