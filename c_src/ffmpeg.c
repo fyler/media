@@ -275,7 +275,7 @@ void loop() {
       int decoder_config_len = 0;
       ei_get_type(buf, &idx, &t, &decoder_config_len);
       if(t != ERL_BINARY_EXT) error("decoder config must be a binary");
-      uint8_t *decoder_config = av_mallocz(decoder_config_len + FF_INPUT_BUFFER_PADDING_SIZE);
+      uint8_t *decoder_config = av_mallocz(decoder_config_len + AV_INPUT_BUFFER_PADDING_SIZE);
       long bin_len = 0;
       ei_decode_binary(buf, &idx, decoder_config, &bin_len);
 
@@ -396,13 +396,13 @@ void loop() {
         if (init_fifo(&fifo, ctx))
             error("failed to init fifo");
       }
-      ctx->flags |= CODEC_FLAG_GLOBAL_HEADER;
+      ctx->flags |= AV_CODEC_FLAG_GLOBAL_HEADER;
       ctx->time_base = (AVRational){1,90000};
       if(avcodec_open2(ctx, t->codec, &opts) < 0) error("failed to allocate video encoder");
 
       AVPacket config;
       config.dts = config.pts = 0;
-      config.flags = CODEC_FLAG_GLOBAL_HEADER;
+      config.flags = AV_CODEC_FLAG_GLOBAL_HEADER;
       config.data = ctx->extradata;
       config.size = ctx->extradata_size;
       reply_avframe(&config, ctx);
