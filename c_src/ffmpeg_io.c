@@ -41,7 +41,7 @@ void reply_avframe(AVPacket *pkt, AVCodecContext *ctx) {
   r.codec = ctx->codec_id == AV_CODEC_ID_H264 ? frame_codec_h264 :
     ctx->codec_id == AV_CODEC_ID_AAC ? frame_codec_aac : ctx->codec_id == AV_CODEC_ID_MP3 ? frame_codec_mp3 : 0;
 
-  r.flavor = pkt->flags & CODEC_FLAG_GLOBAL_HEADER ? frame_flavor_config :
+  r.flavor = pkt->flags & AV_CODEC_FLAG_GLOBAL_HEADER ? frame_flavor_config :
     pkt->flags & AV_PKT_FLAG_KEY & ctx->codec_type == AVMEDIA_TYPE_VIDEO ? frame_flavor_keyframe :
     frame_flavor_frame;
   if (r.content == frame_content_audio) {
